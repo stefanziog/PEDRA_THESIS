@@ -25,7 +25,7 @@ def generate_json(cfg):
         data['LocalHostIp'] = cfg.ip_address
         data['SimMode'] = cfg.SimMode
         data['ClockSpeed'] = cfg.ClockSpeed
-        data["ViewMode"]= "NoDisplay"
+        data["ViewMode"]= "Lit"
         PawnPaths = {}
         PawnPaths["DefaultQuadrotor"] = {}
         PawnPaths["DefaultQuadrotor"]['PawnBP'] = ''' Class'/AirSim/Blueprints/BP_''' + cfg.drone + '''.BP_''' + cfg.drone + '''_C' '''
@@ -75,7 +75,6 @@ def generate_json(cfg):
         json.dump(data, outfile, indent=4)
 
     return flag
-
 
 if __name__ == '__main__':
     # Read the config file

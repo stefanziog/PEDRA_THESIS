@@ -133,7 +133,7 @@ def indoor_vanleer():
     crash_threshold = 0.07
     return orig_ip, level_name, crash_threshold
 
-def outdoor_forest():
+def outdoor_forest_sparse():
     # The environment can be downloaded from
     # https://drive.google.com/drive/u/2/folders/1u5teth6l4JW2IXAkZAg1CbDGR6zE-v6Z
     orig_ip = [
@@ -240,6 +240,28 @@ def indoor_updown():
     crash_threshold = 0.07
     return orig_ip, level_name, crash_threshold
 
+def Blocks():
+    orig_ip =   [
+                  [-1990, 1070, 0], # Player start
+                   [-1500, 300, 0],
+                   [1800, 300, 180],
+                   [2000, -1400, 180]
+                ]
+    level_name = ['Custom1', 'Custom2', 'Custom3', 'Custom4']
+    crash_threshold = 0.07
+    return orig_ip, level_name, crash_threshold
+def light1():
+    orig_ip =   [
+                  [-1990, 1070, 0], # Player start
+                   [-1500, 300, 0],
+                   [1800, 300, 180],
+                   [2000, -1400, 180]
+                ]
+    level_name = ['Blade1', 'Blade2', 'Blade3', 'Blade4']
+    crash_threshold = 0.007
+    return orig_ip, level_name, crash_threshold
+
+
 def initial_positions(name, initZ=0, num_agents = 1):
     name = name+'()'
     orig_ip, levels, crash_threshold = eval(name)
@@ -267,6 +289,7 @@ def initial_positions(name, initZ=0, num_agents = 1):
 
             # z1 = 0
             z1 = initZ # in case of computervision mode
+            print(f"Drone {i+1} Position: x={x1}, y={y1}, z={z1}")
             pitch = 0
             roll = 0
             yaw = orig_ip[i+ind][2]*np.pi/180

@@ -4,10 +4,10 @@ import airsim, time
 import random
 import matplotlib.pyplot as plt
 from util.transformations import euler_from_quaternion
-from network.loss_functions import *
-from numpy import linalg as LA
-from aux_functions import get_CustomImage, get_MonocularImageRGB, get_StereoImageRGB
 import importlib
+
+from aux_functions import get_CustomImage, get_MonocularImageRGB, get_StereoImageRGB
+
 
 class PedraAgent():
     def __init__(self, cfg, client, name, vehicle_name):
@@ -27,7 +27,6 @@ class PedraAgent():
         net_mod = 'network.' + 'initialize_network_' + cfg.algorithm + '(cfg, name, vehicle_name)'
 
         self.network_model = eval(net_mod)
-
 
     ###########################################################################
     # Drone related modules
@@ -92,9 +91,9 @@ class PedraAgent():
             time.sleep(0.07)
             self.client.moveByVelocityAsync(vx=0, vy=0, vz=0, duration=1, vehicle_name=self.vehicle_name)
 
-
     def get_CustomDepth(self, cfg):
         camera_name = 2
+        depth = None
         if cfg.env_type == 'indoor' or cfg.env_type == 'Indoor':
             max_tries = 5
             tries = 0
@@ -102,11 +101,11 @@ class PedraAgent():
             while not correct and tries < max_tries:
                 tries += 1
                 responses = self.client.simGetImages(
-                    [airsim.ImageRequest(camera_name, airsim.ImageType.DepthVis, False, False)],
+                    [airsim.ImageRequest(camera_name, airsim.ImageType.DepthPlanner, False, False)],
                     vehicle_name=self.vehicle_name)
                 img1d = np.fromstring(responses[0].image_data_uint8, dtype=np.uint8)
                 # AirSim bug: Sometimes it returns invalid depth map with a few 255 and all 0s
-                if np.max(img1d)==255 and np.mean(img1d)<0.05:
+                if np.max(img1d) == 255 and np.mean(img1d) < 0.05:
                     correct = False
                 else:
                     correct = True
@@ -115,7 +114,8 @@ class PedraAgent():
         elif cfg.env_type == 'outdoor' or cfg.env_type == 'Outdoor':
             responses = self.client.simGetImages([airsim.ImageRequest(1, airsim.ImageType.DepthPlanner, True)],
                                                  vehicle_name=self.vehicle_name)
-            depth = airsim.list_to_2d_float_array(responses[0].image_data_float, responses[0].width, responses[0].height)
+            depth = airsim.list_to_2d_float_array(responses[0].image_data_float, responses[0].width,
+                                                  responses[0].height)
             thresh = 50
 
         # To make sure the wall leaks in the unreal environment doesn't mess up with the reward function
@@ -229,3 +229,7 @@ class PedraAgent():
                 reward = C_new
 
         return reward, done
+
+    ###########################################################################
+    # Network related modules
+    ###########################################################################

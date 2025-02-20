@@ -1,24 +1,26 @@
 # Author: Aqeel Anwar(ICSRL)
-# Created: 2/19/2020, 8:39 AM
+# Created: 10/4/2020, 10:43 PM
 # Email: aqeel.anwar@gatech.edu
 
-import sys, cv2, time, psutil, numpy as np, pygame
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # for 3D trajectory plot
+import sys, cv2, time
 import nvidia_smi
+import psutil
+import numpy as np
+import pygame
+import matplotlib.pyplot as plt  # Added for plotting
+from mpl_toolkits.mplot3d import Axes3D  # Needed for 3D trajectory plot
 from network.agent import PedraAgent
 from unreal_envs.initial_positions import *
 from os import getpid
 from network.Memory import Memory
 from aux_functions import *
 import os
-from util.transformations import euler_from_quaternion
+from util.transformations import euler_from_quaternion, quaternion_from_euler
 from configs.read_cfg import read_cfg, update_algorithm_cfg
-from pathlib import Path
 import pandas as pd
 
-def DeepREINFORCE(cfg, env_process, env_folder):
-    algorithm_cfg = read_cfg(config_filename='configs/DeepREINFORCE.cfg', verbose=True)
+def DeepPPO(cfg, env_process, env_folder):
+    algorithm_cfg = read_cfg(config_filename='configs/DeepPPO.cfg', verbose=True)
     algorithm_cfg.algorithm = cfg.algorithm
 
     if 'GlobalLearningGlobalUpdate-SA' in algorithm_cfg.distributed_algo:
@@ -26,8 +28,9 @@ def DeepREINFORCE(cfg, env_process, env_folder):
         cfg.num_agents = 1
     client = []
     # Connect to Unreal Engine and get the drone handle: client
-    client, old_posit, initZ = connect_drone(ip_address=cfg.ip_address, phase=cfg.mode, num_agents=cfg.num_agents,
-                                             client=client)
+    client, old_posit, initZ = connect_drone(ip_address=cfg.ip_address, phase=cfg.mode,
+                                             num_agents=cfg.num_agents, client=client)
+    # Save the initial position for later use in inference
     initial_pos = old_posit.copy()
     # Load the initial positions for the environment
     reset_array, reset_array_raw, level_name, crash_threshold = initial_positions(cfg.env_name, initZ, cfg.num_agents)
@@ -50,6 +53,7 @@ def DeepREINFORCE(cfg, env_process, env_folder):
     data_tuple = {}
     agent = {}
     epi_num = {}
+
     if cfg.mode == 'train':
         iter = {}
         wait_for_others = {}
@@ -68,73 +72,69 @@ def DeepREINFORCE(cfg, env_process, env_folder):
             print_orderly(name_agent, 40)
             # TODO: turn the neural network off if global agent is present
             agent[name_agent] = PedraAgent(algorithm_cfg, client, name='DQN', vehicle_name=name_agent)
-
             current_state[name_agent] = agent[name_agent].get_state()
 
     elif cfg.mode == 'infer':
+        # In inference, we use only one agent
         iter = 1
         name_agent = 'drone0'
         name_agent_list.append(name_agent)
         agent[name_agent] = PedraAgent(algorithm_cfg, client, name=name_agent + 'DQN', vehicle_name=name_agent)
 
-        cfg_path = Path(env_folder) / "config.cfg"
-        env_cfg = read_cfg(str(cfg_path), verbose=True)
-        print("ncfg", env_cfg)
+        env_cfg = read_cfg(config_filename=env_folder + '/config.cfg', verbose=True)
         nav_x = []
         nav_y = []
         altitude = {}
         altitude[name_agent] = []
-
-        p_z, f_z, fig_z, ax_z, line_z, fig_nav, ax_nav, nav = initialize_infer(env_cfg=env_cfg, client=client,
-                                                                               env_folder=env_folder)
+        p_z, f_z, fig_z, ax_z, line_z, fig_nav, ax_nav, nav = initialize_infer(
+            env_cfg=env_cfg, client=client, env_folder=env_folder)
         nav_text = ax_nav.text(0, 0, '')
 
-        # Select initial position and save it for later return
-        reset_to_initial(0, reset_array, client, vehicle_name=name_agent)
-        old_posit[name_agent] = client.simGetVehiclePose(vehicle_name=name_agent)
-        initial_pose = old_posit[name_agent]
-
-        # --- Additional Figures for Inference Metrics ---
+        # ---- New: Initialize additional figures for inference metrics ----
         # Figure for iteration time per loop
         fig_time, ax_time = plt.subplots()
         ax_time.set_title("Iteration Time (s)")
         ax_time.set_xlabel("Iteration")
         ax_time.set_ylabel("Time (s)")
-        time_exec_list = []
+        time_exec_list = []  # list to store execution time per iteration
 
         # Figure for cumulative distance vs. iterations
         fig_distance, ax_distance = plt.subplots()
         ax_distance.set_title("Cumulative Distance")
         ax_distance.set_xlabel("Iteration")
         ax_distance.set_ylabel("Distance")
-        distance_list = []
+        distance_list = []  # list to store cumulative distance values
 
-        # 3D Trajectory plot (X, Y, Z)
+        # New Plot: 3D trajectory plot (X, Y, Z)
         fig_3d = plt.figure()
         ax_3d = fig_3d.add_subplot(111, projection='3d')
         ax_3d.set_title("3D Trajectory")
         ax_3d.set_xlabel("X")
         ax_3d.set_ylabel("Y")
         ax_3d.set_zlabel("Z")
-        traj_x = []  # to store X coordinates
-        traj_y = []  # to store Y coordinates
-        traj_z = []  # to store Z coordinates
+        traj_x = []  # list to store X coordinates
+        traj_y = []  # list to store Y coordinates
+        traj_z = []  # list to store Z coordinates
 
-        # Orientation (Yaw) over time plot
+        # New Plot: Orientation (Yaw) over time
         fig_yaw, ax_yaw = plt.subplots()
         ax_yaw.set_title("Orientation (Yaw) Over Time")
         ax_yaw.set_xlabel("Iteration")
         ax_yaw.set_ylabel("Yaw (radians)")
-        yaw_list = []
+        yaw_list = []  # list to store yaw values
 
-        # Action distribution histogram
+        # New Plot: Action distribution histogram
         fig_action, ax_action = plt.subplots()
         ax_action.set_title("Action Distribution")
         ax_action.set_xlabel("Action")
         ax_action.set_ylabel("Frequency")
-        action_list = []
+        action_list = []  # list to store predicted action strings
+        # --------------------------------------------------------------------
 
-    # Initialize variables
+        # Select initial position
+        reset_to_initial(0, reset_array, client, vehicle_name=name_agent)
+        old_posit[name_agent] = client.simGetVehiclePose(vehicle_name=name_agent)
+    # Initialize variables (common to both modes)
     episode = {}
     active = True
 
@@ -156,6 +156,7 @@ def DeepREINFORCE(cfg, env_process, env_folder):
     epi_env_array = {}
     log_files = {}
 
+    # If the phase is inference force the num_agents to 1
     hyphens = '-' * int((80 - len('Log files')) / 2)
     print(hyphens + ' ' + 'Log files' + ' ' + hyphens)
     for name_agent in name_agent_list:
@@ -173,7 +174,7 @@ def DeepREINFORCE(cfg, env_process, env_folder):
         epi_env_array[name_agent] = np.zeros(shape=len(reset_array[name_agent]), dtype=np.int32)
         distance[name_agent] = 0
         # Log file
-        log_path = os.path.join(algorithm_cfg.network_path, name_agent, cfg.mode + 'log.txt')
+        log_path = algorithm_cfg.network_path + '/' + name_agent + '/' + cfg.mode + 'log.txt'
         print("Log path: ", log_path)
         log_files[name_agent] = open(log_path, 'w')
 
@@ -182,12 +183,11 @@ def DeepREINFORCE(cfg, env_process, env_folder):
     while active:
         try:
             active, automate, algorithm_cfg, client = check_user_input(
-                active, automate, agent[name_agent], client,
-                old_posit[name_agent], initZ, fig_z, fig_nav, env_folder, cfg, algorithm_cfg)
+                active, automate, agent[name_agent], client, old_posit[name_agent], initZ,
+                fig_z, fig_nav, env_folder, cfg, algorithm_cfg)
 
             if automate:
                 if cfg.mode == 'train':
-                    # Training branch remains unchanged in this example
                     if iter[name_agent] % algorithm_cfg.switch_env_steps == 0:
                         switch_env = True
                     else:
@@ -198,7 +198,7 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                             start_time = time.time()
                             if switch_env:
                                 posit1_old = client.simGetVehiclePose(vehicle_name=name_agent)
-                                times_switch[name_agent] += 1
+                                times_switch[name_agent] = times_switch[name_agent] + 1
                                 level_state[name_agent][level[name_agent]] = current_state[name_agent]
                                 level_posit[name_agent][level[name_agent]] = posit1_old
                                 last_crash_array[name_agent][level[name_agent]] = last_crash[name_agent]
@@ -230,7 +230,7 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                                 else:
                                     agent_this_drone = agent[name_agent]
 
-                                action, action_type = policy_REINFORCE(current_state[name_agent], agent_this_drone)
+                                action, p_a, action_type = policy_PPO(current_state[name_agent], agent_this_drone)
                                 action_word = translate_action(action, algorithm_cfg.num_actions)
                                 agent[name_agent].take_action(action, algorithm_cfg.num_actions, Mode='static')
                                 new_state[name_agent] = agent[name_agent].get_state()
@@ -240,15 +240,16 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                                 position = posit[name_agent].position
                                 old_p = np.array([old_posit[name_agent].position.x_val, old_posit[name_agent].position.y_val])
                                 new_p = np.array([position.x_val, position.y_val])
-                                distance[name_agent] += np.linalg.norm(new_p - old_p)
+                                distance[name_agent] = distance[name_agent] + np.linalg.norm(new_p - old_p)
                                 old_posit[name_agent] = posit[name_agent]
                                 reward, crash = agent[name_agent].reward_gen(new_depth1, action, crash_threshold, thresh,
                                                                              debug, cfg)
-                                ret[name_agent] += reward
+
+                                ret[name_agent] = ret[name_agent] + reward
                                 agent_state = agent[name_agent].GetAgentState()
 
                                 if agent_state.has_collided or distance[name_agent] < 0.01:
-                                    num_collisions[name_agent] += 1
+                                    num_collisions[name_agent] = num_collisions[name_agent] + 1
                                     if agent_state.has_collided:
                                         print('Crash: Collision detected from environment')
                                     else:
@@ -256,7 +257,8 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                                     crash = True
                                     reward = -1
 
-                                data_tuple[name_agent].append([current_state[name_agent], action, reward, crash])
+                                data_tuple[name_agent].append([current_state[name_agent], action, new_state[name_agent],
+                                                               reward, p_a, crash])
 
                                 if crash:
                                     wait_for_others[name_agent] = True
@@ -283,10 +285,10 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                                                                                            group=name_agent,
                                                                                            value=len(data_tuple[name_agent]),
                                                                                            index=epi_num[name_agent])
-                                        train_REINFORCE(data_tuple[name_agent], algorithm_cfg.batch_size, agent_this_drone,
-                                                        algorithm_cfg.learning_rate, algorithm_cfg.input_size,
-                                                        algorithm_cfg.gamma, epi_num[name_agent])
-                                        c = agent_this_drone.network_model.get_vars()[15]
+                                        train_PPO(data_tuple[name_agent], algorithm_cfg, agent_this_drone,
+                                                  algorithm_cfg.learning_rate, algorithm_cfg.input_size,
+                                                  algorithm_cfg.gamma, epi_num[name_agent])
+                                        c = agent_this_drone.network_model.get_vars()[15][0]
                                         agent_this_drone.network_model.log_to_tensorboard(tag='weight', group=name_agent,
                                                                                           value=c[0],
                                                                                           index=epi_num[name_agent])
@@ -311,7 +313,8 @@ def DeepREINFORCE(cfg, env_process, env_folder):
 
                                 time_exec = time.time() - start_time
                                 gpu_memory, gpu_utilization, sys_memory = get_SystemStats(process, cfg.NVIDIA_GPU)
-                                for i in range(len(gpu_memory)):
+
+                                for i in range(0, len(gpu_memory)):
                                     tag_mem = 'GPU' + str(i) + '-Memory-GB'
                                     tag_util = 'GPU' + str(i) + 'Utilization-%'
                                     agent_this_drone.network_model.log_to_tensorboard(tag=tag_mem, group='SystemStats',
@@ -324,7 +327,7 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                                                                                   value=sys_memory,
                                                                                   index=iter[name_agent])
 
-                                s_log = '{:<6s} - Level {:>2d} - Iter: {:>6d}/{:<5d} {:<8s}-{:>5s} lr: {:>1.8f} Ret = {:>+6.4f} Last Crash = {:<5d} t={:<1.3f} SF = {:<5.4f}  Reward: {:<+1.4f}'.format(
+                                s_log = '{:<6s} - Level {:>2d} - Iter: {:>6d}/{:<5d} {:<8s}-{:>5s} lr: {:>1.8f} Ret = {:>+6.4f} Last Crash = {:<5d} t={:<1.3f} SF = {:<5.4f}  Reward: {:<+1.4f}  '.format(
                                     name_agent,
                                     int(level[name_agent]),
                                     iter[name_agent],
@@ -340,28 +343,33 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                                 if iter[name_agent] % print_interval == 0:
                                     print(s_log)
                                 log_files[name_agent].write(s_log + '\n')
-                                last_crash[name_agent] += 1
+                                last_crash[name_agent] = last_crash[name_agent] + 1
+
                                 if debug:
                                     cv2.imshow(name_agent, np.hstack((np.squeeze(current_state[name_agent], axis=0),
                                                                       np.squeeze(new_state[name_agent], axis=0))))
                                     cv2.waitKey(1)
+
                                 if epi_num[name_agent] % algorithm_cfg.total_episodes == 0:
                                     print(automate)
                                     automate = False
+
                                 iter[name_agent] += 1
 
                 elif cfg.mode == 'infer':
-                    # Inference phase
+                    # ------------------ Inference mode with additional plotting ------------------
+                    iter_start_time = time.time()  # Start time for current iteration
+
                     agent_state = agent[name_agent].GetAgentState()
-                    # Trigger return if collision occurs or cumulative distance >= 50
+                    # Trigger return if collision OR total distance traveled is >= 50
                     if agent_state.has_collided or distance[name_agent] >= 50:
                         print('Drone collided or distance threshold reached')
                         print("Total distance traveled: ", np.round(distance[name_agent], 2))
-                        active = False
-                        # Hover for 5 seconds
+                        # Hover at the current position for 5 seconds
+                        print("Hovering at current position for 5 seconds...")
                         client.moveByVelocityAsync(vx=0, vy=0, vz=0, duration=5, vehicle_name=name_agent).join()
-                        print("Drone is hovering for 5 seconds.")
-                        # Retrace path using stored trajectory data
+                        
+                        # Retrace the path using the stored trajectory (in reverse order)
                         if len(traj_x) > 0:
                             print("Retracing path back to initial position...")
                             for i in range(len(traj_x) - 1, -1, -1):
@@ -370,27 +378,36 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                                 target_z = traj_z[i]
                                 print("Moving to waypoint:", target_x, target_y, target_z)
                                 client.moveToPositionAsync(target_x, target_y, target_z, 5, vehicle_name=name_agent).join()
-                                time.sleep(0.5)
+                                time.sleep(0.5)  # short pause between waypoints
                         else:
-                            print("No trajectory data available, moving directly to initial position...")
-                            client.moveToPositionAsync(
-                                initial_pose.position.x_val,
-                                initial_pose.position.y_val,
-                                initial_pose.position.z_val,
-                                velocity=1.0,
-                                vehicle_name=name_agent
-                            ).join()
-                        print("Drone has reached the initial position.")
-                        # Hover for 10 seconds at initial position
-                        print("Hovering for 10 seconds...")
-                        client.hoverAsync(vehicle_name=name_agent).join()
-                        time.sleep(10)
-                        # Land the drone
-                        print("Landing the drone...")
-                        client.landAsync(vehicle_name=name_agent).join()
-                        print("Drone has landed. Ending simulation.")
-                       # Define the directory to save results
-                        file_path = os.path.join(os.path.expanduser("~"), "Pictures", "DeepReinforce_Results") + os.sep
+                            print("No trajectory data available, flying directly to initial position...")
+                            init_x, init_y, init_z = 0, 0, 0
+                            try:
+                                init_x = initial_pos.position.x_val
+                                init_y = initial_pos.position.y_val
+                                init_z = initial_pos.position.z_val
+                            except Exception:
+                                pos_dict = initial_pos.get("position", initial_pos)
+                                if "x_val" in pos_dict:
+                                    init_x = pos_dict["x_val"]
+                                    init_y = pos_dict["y_val"]
+                                    init_z = pos_dict["z_val"]
+                                elif "x" in pos_dict:
+                                    init_x = pos_dict["x"]
+                                    init_y = pos_dict["y"]
+                                    init_z = pos_dict["z"]
+                            client.moveToPositionAsync(init_x, init_y, init_z, 5, vehicle_name=name_agent).join()
+                        
+                        # Wait a moment to ensure arrival
+                        time.sleep(2)
+                        
+                        # Hover at the initial position for 10 seconds
+                        print("Hovering at initial position for 10 seconds...")
+                        client.moveByVelocityAsync(vx=0, vy=0, vz=0, duration=10, vehicle_name=name_agent).join()
+                        active = False
+
+                        # Define the directory to save results
+                        file_path = os.path.join(os.path.expanduser("~"), "Pictures", "DeepPPO_Results") + os.sep
                         if not os.path.exists(file_path):
                             os.makedirs(file_path)
 
@@ -423,19 +440,17 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                         action_df.to_csv(file_path + 'action_distribution.csv', index=False)
 
                         print("✅ All data saved as CSV files in:", file_path)
+                        if len(time_exec_list) > 0:
+                            print("Average iteration time: {:.3f} s".format(np.mean(time_exec_list)))
                     else:
-                        iter_start_time = time.time()
                         posit[name_agent] = client.simGetVehiclePose(vehicle_name=name_agent)
-                        distance[name_agent] += np.linalg.norm(np.array([
-                            old_posit[name_agent].position.x_val - posit[name_agent].position.x_val,
-                            old_posit[name_agent].position.y_val - posit[name_agent].position.y_val
-                        ]))
+                        distance[name_agent] = distance[name_agent] + np.linalg.norm(np.array(
+                            [old_posit[name_agent].position.x_val - posit[name_agent].position.x_val,
+                             old_posit[name_agent].position.y_val - posit[name_agent].position.y_val]))
                         altitude[name_agent].append(-posit[name_agent].position.z_val - f_z)
 
-                        quat = (posit[name_agent].orientation.w_val,
-                                posit[name_agent].orientation.x_val,
-                                posit[name_agent].orientation.y_val,
-                                posit[name_agent].orientation.z_val)
+                        quat = (posit[name_agent].orientation.w_val, posit[name_agent].orientation.x_val,
+                                posit[name_agent].orientation.y_val, posit[name_agent].orientation.z_val)
                         yaw = euler_from_quaternion(quat)[2]
 
                         x_val = posit[name_agent].position.x_val
@@ -452,10 +467,9 @@ def DeepREINFORCE(cfg, env_process, env_folder):
 
                         line_z.set_data(np.arange(len(altitude[name_agent])), altitude[name_agent])
                         ax_z.set_xlim(0, len(altitude[name_agent]))
-                        fig_z.canvas.draw()
-                        fig_z.canvas.flush_events()
+                        #fig_z.canvas.draw()
+                        #fig_z.canvas.flush_events()
 
-                        # --- Additional Plot Updates ---
                         # Update 3D trajectory plot
                         traj_x.append(x_val)
                         traj_y.append(y_val)
@@ -466,8 +480,8 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                         ax_3d.set_xlabel("X")
                         ax_3d.set_ylabel("Y")
                         ax_3d.set_zlabel("Z")
-                        fig_3d.canvas.draw()
-                        fig_3d.canvas.flush_events()
+                        #fig_3d.canvas.draw()
+                        #fig_3d.canvas.flush_events()
 
                         # Update orientation (yaw) plot
                         yaw_list.append(yaw)
@@ -476,13 +490,16 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                         ax_yaw.set_title("Orientation (Yaw) Over Time")
                         ax_yaw.set_xlabel("Iteration")
                         ax_yaw.set_ylabel("Yaw (radians)")
-                        fig_yaw.canvas.draw()
-                        fig_yaw.canvas.flush_events()
+                        #fig_yaw.canvas.draw()
+                        #fig_yaw.canvas.flush_events()
 
-                        # Update action distribution histogram
+                        # ------------------ Compute Action First ------------------
                         current_state[name_agent] = agent[name_agent].get_state()
                         action, action_type = policy_REINFORCE(current_state[name_agent], agent[name_agent])
                         action_word = translate_action(action, algorithm_cfg.num_actions)
+                        # ------------------------------------------------------------
+
+                        # Update action distribution histogram using the newly computed action
                         action_list.append(action_word)
                         ax_action.clear()
                         unique_actions, counts = np.unique(action_list, return_counts=True)
@@ -490,41 +507,45 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                         ax_action.set_title("Action Distribution")
                         ax_action.set_xlabel("Action")
                         ax_action.set_ylabel("Frequency")
-                        fig_action.canvas.draw()
-                        fig_action.canvas.flush_events()
-
-                        # Take the action and update the old position
-                        agent[name_agent].take_action(action, algorithm_cfg.num_actions, Mode='static')
-                        old_posit[name_agent] = posit[name_agent]
-
-                        s_log = 'Position = ({:<3.2f},{:<3.2f}, {:<3.2f}) Orientation={:<1.3f} Predicted Action: {:<8s}'.format(
-                            x_val, y_val, z_val, yaw, action_word)
-                        print(s_log)
-                        log_files[name_agent].write(s_log + '\n')
+                        #fig_action.canvas.draw()
+                        #fig_action.canvas.flush_events()
 
                         iter_end_time = time.time()
                         iter_time = iter_end_time - iter_start_time
                         time_exec_list.append(iter_time)
                         distance_list.append(distance[name_agent])
 
+                        # Update the iteration time plot (printing disabled)
                         ax_time.clear()
-                        ax_time.plot(range(1, len(time_exec_list) + 1), time_exec_list, marker='o')
+                        ax_time.plot(range(1, len(time_exec_list) + 1), time_exec_list, marker='o', label="Iteration Time")
                         ax_time.set_title("Iteration Time (s)")
                         ax_time.set_xlabel("Iteration")
                         ax_time.set_ylabel("Time (s)")
-                        fig_time.canvas.draw()
-                        fig_time.canvas.flush_events()
+                        ax_time.legend()
+                        # Commented out to disable figure printing
+                        # fig_time.canvas.draw()
+                        # fig_time.canvas.flush_events()
 
+                        # Update the cumulative distance plot (printing disabled)
                         ax_distance.clear()
-                        ax_distance.plot(range(1, len(distance_list) + 1), distance_list, marker='o')
+                        ax_distance.plot(range(1, len(distance_list) + 1), distance_list, marker='o', label="Cumulative Distance")
                         ax_distance.set_title("Cumulative Distance")
                         ax_distance.set_xlabel("Iteration")
                         ax_distance.set_ylabel("Distance")
-                        fig_distance.canvas.draw()
-                        fig_distance.canvas.flush_events()
-                        # --- End Additional Plot Updates ---
+                        ax_distance.legend()
+                        # Commented out to disable figure printing
+                        # fig_distance.canvas.draw()
+                        # fig_distance.canvas.flush_events()
 
-                        iter += 1
+                        agent[name_agent].take_action(action, algorithm_cfg.num_actions, Mode='static')
+                        old_posit[name_agent] = posit[name_agent]
+
+                        s_log = 'Position = ({:<3.2f},{:<3.2f}, {:<3.2f}) Orientation={:<1.3f} Predicted Action: {:<8s}  '.format(
+                            x_val, y_val, z_val, yaw, action_word)
+                        print(s_log)
+                        log_files[name_agent].write(s_log + '\n')
+                    iter += 1
+            # End of if automate
 
         except Exception as e:
             if str(e) == 'cannot reshape array of size 1 into shape (0,0,3)':
@@ -533,7 +554,8 @@ def DeepREINFORCE(cfg, env_process, env_folder):
                                                          num_agents=cfg.num_agents, client=client)
                 time.sleep(2)
                 agent[name_agent].client = client
-                wait_for_others[name_agent] = False
+                if cfg.mode == 'train':
+                    wait_for_others[name_agent] = False
             else:
                 print('------------- Error -------------')
                 exc_type, exc_obj, exc_tb = sys.exc_info()

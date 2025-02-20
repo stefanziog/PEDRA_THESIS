@@ -67,25 +67,46 @@ def communicate_across_agents(agent, name_agent_list, algorithm_cfg):
 
 def start_environment(env_name):
     print_orderly('Environment', 80)
-    env_folder = os.path.dirname(os.path.abspath(__file__)) + "/unreal_envs/" + env_name + "/"
-    path = env_folder + env_name + ".exe"
-    # env_process = []
-    env_process = subprocess.Popen(path)
+    
+    # Construct the environment folder and path to the executable
+    env_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "unreal_envs", "Packaged Environments", "Indoor", env_name)
+    path = os.path.join(env_folder, env_name + ".exe")
+    
+    # Debug print to confirm the constructed path
+    print("Executable path:", path)
+    
+    # Check if the executable exists at the specified path
+    if not os.path.exists(path):
+        print(f"Error: The environment executable at {path} was not found.")
+        return None, env_folder
+    
+    # Start the environment
+    env_process = subprocess.Popen(path, shell=True)  # Using shell=True for Windows compatibility
     time.sleep(5)
-    print("Successfully loaded environment: " + env_name)
+    print("Successfully loaded environment:", env_name)
 
     return env_process, env_folder
 
 
+
 def initialize_infer(env_cfg, client, env_folder):
+    if not os.path.exists(env_folder + 'results'):
+        os.makedirs(env_folder + 'results')
 
-    if not os.path.exists(env_folder+'results'):
-        os.makedirs(env_folder+'results')
 
+    print("THIS IS THE FLOOR Z")
+    print(env_cfg.floor_z)
+    print("THIS IS THE CEILING Z")
+    print(env_cfg.ceilling_z)
+    print("PL START Z")
+    print(env_cfg.player_start_z)
+    print("THIS IS THE FOLDER")
+
+    print(env_cfg, env_folder)
     # Mapping floor to 0 height
-    f_z = env_cfg.floor_z/100
-    c_z = (env_cfg.ceiling_z-env_cfg.floor_z)/100
-    p_z = (env_cfg.player_start_z-env_cfg.floor_z)/100
+    f_z = int(env_cfg.floor_z) / 100                 #int(env_cfg.floor_z)
+    c_z = (env_cfg.ceiling_z - env_cfg.floor_z) / 100
+    p_z = (env_cfg.player_start_z - env_cfg.floor_z) / 100
 
     plt.ion()
     fig_z = plt.figure()
@@ -98,8 +119,8 @@ def initialize_infer(env_cfg, client, env_folder):
 
     fig_nav = plt.figure()
     ax_nav = fig_nav.add_subplot(111)
-    img = plt.imread(env_folder+ env_cfg.floorplan)
-    ax_nav.imshow(img)
+   # img = plt.imread(env_folder+ "\\"+ env_cfg.floorplan)
+    #ax_nav.imshow(img)
     plt.axis('off')
     plt.title("Navigational map")
     plt.plot(env_cfg.o_x, env_cfg.o_y, 'b*', linewidth=20)
@@ -196,7 +217,72 @@ def policy_REINFORCE(curr_state, agent):
     action = agent.network_model.action_selection(curr_state)
     action_type = 'Prob'
     return action[0], action_type
+###################
+#ADDITION!!!!
+##################
+def policy_PPO(curr_state, agent):
+    action, p_a = agent.network_model.action_selection_with_prob(curr_state)
+    action_type = 'Prob'
+    return action[0], p_a, action_type
+def train_PPO(data_tuple_total, algorithm_cfg, agent, lr, input_size, gamma, epi_num):
+    batch_size = algorithm_cfg.batch_size
+    train_epoch_per_batch = algorithm_cfg.train_epoch_per_batch
+    lmbda = algorithm_cfg.lmbda
+    # # Divide the data tuple in PPO_steps
+    # ppo_steps = 3
+    # for i in range(int(np.ceil(len(data_tuple) / float(ppo_steps)))):
+    #     print(i)
+    #     start_ind = i * ppo_steps
+    #     end_ind = np.min((len(data_tuple), (i + 1) * ppo_steps))
+    #     data_sub = data_tuple[start_ind: end_ind]
+    #
+    #
+    episode_len_total = len(data_tuple_total)
+    num_batches = int(np.ceil(episode_len_total / float(batch_size)))
+    for i in range(num_batches):
+        start_ind = i * batch_size
+        end_ind = np.min((len(data_tuple_total), (i + 1) * batch_size))
+        data_tuple = data_tuple_total[start_ind: end_ind]
+        episode_len = len(data_tuple)
 
+        curr_states = np.zeros(shape=(episode_len, input_size, input_size, 3))
+        next_states = np.zeros(shape=(episode_len, input_size, input_size, 3))
+        actions = np.zeros(shape=(episode_len, 1), dtype=int)
+        crashes = np.zeros(shape=(episode_len, 1))
+        rewards = np.zeros(shape=(episode_len, 1))
+        p_a = np.zeros(shape=(episode_len,1))
+
+        for ii, m in enumerate(data_tuple):
+            curr_state_m, action_m, next_state_m, reward_m, p_a_m, crash_m = m
+            curr_states[ii, :, :, :] = curr_state_m[...]
+            next_states[ii, :, :, :] = next_state_m[...]
+            actions[ii] = action_m
+            rewards[ii] = reward_m
+            p_a[ii] = p_a_m
+            crashes[ii] = ~crash_m
+
+        for i in range(train_epoch_per_batch):
+            V_s = agent.network_model.get_state_value(curr_states)
+            V_s_ = agent.network_model.get_state_value(next_states)
+            TD_target = rewards + gamma*V_s_* crashes
+            delta = TD_target - V_s
+
+            GAE_array = []
+            GAE=0
+            for delta_t in delta[::-1]:
+                GAE = gamma*lmbda* GAE + delta_t
+                GAE_array.append(GAE)
+
+            GAE_array.reverse()
+            GAE = np.array(GAE_array)
+            # Normalize the reward to reduce variance in training
+            GAE -= np.mean(GAE)
+            GAE /= (np.std(GAE) + 1e-8)
+            # TODO: zero mean unit std GAE
+            agent.network_model.train_policy(curr_states, actions, TD_target, p_a, GAE, lr, epi_num)
+###################
+# END ADDITION!!!!
+##################
 def train_REINFORCE(data_tuple, batch_size, agent, lr, input_size, gamma, epi_num):
     episode_len = len(data_tuple)
 
@@ -286,7 +372,7 @@ def print_orderly(str, n):
     hyphens = '-' * int((n - len(str)) / 2)
     print(hyphens + ' ' + str + ' ' + hyphens)
 
-def connect_drone(ip_address='127.0.0.0', phase='infer', num_agents=1, client=[]):
+def connect_drone(ip_address='127.0.0.6', phase='infer', num_agents=1, client=[]):
     if client != []:
         client.reset()
     print_orderly('Drone', 80)
@@ -327,11 +413,17 @@ def get_SystemStats(process, NVIDIA_GPU):
 
     return gpu_memory, gpu_utilization, sys_memory
 
-def get_MonocularImageRGB(client, vehicle_name):
+'''''
+def resize_image_to_expected(img_rgb):
+    # Hardcode the image to the expected size
+    target_width, target_height = 320, 180
+    resized_image = cv2.resize(img_rgb, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
+    print(f"Image resized to expected size: {resized_image.shape}")
+    return resized_image
 
-    responses1 = client.simGetImages([
-        airsim.ImageRequest('front_center', airsim.ImageType.Scene, False,
-                            False)], vehicle_name=vehicle_name)  # scene vision image in uncompressed RGBA array
+'''''
+def get_MonocularImageRGB(client, vehicle_name):
+    responses1 = client.simGetImages(requests=[airsim.ImageRequest('front_center', airsim.ImageType.Scene, False, False)], vehicle_name=vehicle_name)  # scene vision image in uncompressed RGBA array
 
     response = responses1[0]
     img1d = np.fromstring(response.image_data_uint8, dtype=np.uint8)  # get numpy array
@@ -343,12 +435,13 @@ def get_MonocularImageRGB(client, vehicle_name):
 
     return camera_image
 
+
 def get_StereoImageRGB(client, vehicle_name):
-    camera_image=[]
+    camera_image = []
     responses = client.simGetImages(
         [
-        airsim.ImageRequest('front_left', airsim.ImageType.Scene, False, False),
-        airsim.ImageRequest('front_right', airsim.ImageType.Scene, False, False)
+            airsim.ImageRequest('front_left', airsim.ImageType.Scene, False, False),
+            airsim.ImageRequest('front_right', airsim.ImageType.Scene, False, False)
         ], vehicle_name=vehicle_name)
 
     for i in range(2):
@@ -361,6 +454,7 @@ def get_StereoImageRGB(client, vehicle_name):
         camera_image.append(camera_image_rgb)
 
     return camera_image
+
 
 def get_CustomImage(client, vehicle_name, camera_name):
     responses1 = client.simGetImages([
@@ -376,6 +470,8 @@ def get_CustomImage(client, vehicle_name, camera_name):
     camera_image = camera_image_rgb
 
     return camera_image
+
+
 
 
 # def get_image(client, vehicle_name, camera_type, first_frame, last_frame):
