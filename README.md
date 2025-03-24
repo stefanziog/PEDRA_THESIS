@@ -1,6 +1,10 @@
 # Programmable Engine for Drone Reinforcement Learning (RL) Applications (PEDRA-2.0)
 The original version of PEDRA can be found : https://github.com/aqeelanwar/PEDRA
 
+IMPORTANT THINGS FOR A SMOOTH RUN:
+1. Python Version 3.6 for the venv
+2. AirSim version 1.2.2. This is important if you want to create environments that are compatible with PEDRA.
+
 ![Cover Photo](/images/pedra_cover.png)
 [![Watch the video](/images/pedra_intro.png)](https://www.youtube.com/watch?v=ivQkhl494Sc)
 
